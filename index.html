@@ -7,6 +7,7 @@
 
   <!-- D3 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12/dist/d3-sankey.min.js"></script>
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -190,7 +191,7 @@
 
     <section class="chart-panel">
       <h2>Circle packing – UK population</h2>
-      <p class="chart-desc">Below are two ways of representing hierarchical data, using UK population data from the ONS.</p>
+      <p class="chart-desc">Below are two ways of representing hierarchical data, using UK population data from the Office for National Statistics.</p>
       <div class="chart-container" id="chart3">
         <div class="placeholder">
           <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
@@ -214,6 +215,19 @@
       </div>
     </section>
 
+    <section class="chart-panel">
+      <h2>Sankey diagram – Land use in Scotland</h2>
+      <p class="chart-desc">Built from data from the ONS.</p>
+      <div class="chart-container" id="chart5">
+        <div class="placeholder">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+            <rect x="1" y="1" width="30" height="30" rx="2" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
+          </svg>
+          <span>Chart 4</span>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <footer>
@@ -225,8 +239,8 @@
     document.getElementById("date-stamp").textContent =
       new Date().toLocaleDateString("en-GB", { year: "numeric", month: "long" });
 
-    Promise.all([d3.csv("renewables_data.csv"), d3.csv("pop_data.csv")])
-       .then(([renewables, population]) => {
+    Promise.all([d3.csv("renewables_data.csv"), d3.csv("pop_data.csv"), d3.csv("ScotLand.csv")])
+       .then(([renewables, population, scotland]) => {
 
       // stratify the population data
       const hierarchy = d3.stratify()
@@ -239,11 +253,14 @@
         : 0
       );
 
+    
+
       // pass each dataset to the relevant chart
       drawChart1(renewables, "#chart1");
       drawChart2(renewables, "#chart2");
       drawChart3(hierarchy, "#chart3");
       drawChart4(hierarchy, "#chart4");
+      drawChart5(scotland, "#chart5")
       
     }).catch(err => console.error("Failed to load data:", err));
 
@@ -867,6 +884,166 @@
         svg.node().appendChild(hoverLabel.node());
       // --- paste your chart 4 code here ---
     }
+
+        // ── Chart 5 ────────────────────────────────────────
+    function drawChart5(rawData, target) {
+      const container = document.querySelector(target);
+      container.innerHTML = "";
+
+      const nodeAlign = "sankeyJustify";
+      const linkColor = "source-target";
+      const width = 928;
+      const height = 800;
+      const format = d3.format(",.0f");
+
+      // Remap columns
+      const remapped = rawData
+        .map(d => ({
+          source: d["1990 habitat"] + " (1990)",
+          target: d["2021 habitat"] + " (2021)",
+          value: +d["hectares"]
+        }));
+
+      const nodes = Array.from(
+        new Set(remapped.flatMap(l => [l.source, l.target])),
+        name => ({ name, category: name.replace(/ \(.*/, "") })
+      ).sort((a, b) => {
+        const aIs1990 = a.name.includes("(1990)");
+        const bIs1990 = b.name.includes("(1990)");
+        if (aIs1990 && !bIs1990) return -1;
+        if (!aIs1990 && bIs1990) return 1;
+        if (aIs1990 && bIs1990) return a.name.localeCompare(b.name);
+        return 0;
+      });
+
+      const svg = d3.select(target).append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .attr("viewBox", [0, 0, width, height])
+        .attr("style", "max-width: 100%; height: auto; font: 10px sans-serif;");
+
+      const hoverLabel = svg.append("text")
+        .attr("x", width / 2)
+        .attr("y", 15)
+        .attr("text-anchor", "middle")
+        .attr("font-size", "14px")
+        .attr("font-family", "Merriweather")
+        .attr("fill", "#333");
+
+      const sankey = d3.sankey()
+        .nodeId(d => d.name)
+        .nodeAlign(d3[nodeAlign])
+        .nodeWidth(15)
+        .nodePadding(20)
+        .extent([[1, 25], [width - 1, height - 5]]);  
+
+      const { nodes: sNodes, links: sLinks } = sankey({
+        nodes: nodes.map(d => Object.assign({}, d)),
+        links: remapped.map(d => Object.assign({}, d))
+      });
+
+      // Force left column alphabetical order
+      const leftNodes = sNodes
+        .filter(d => d.name.includes("(1990)"))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const totalHeight = d3.sum(leftNodes, d => d.y1 - d.y0);
+      const totalPadding = height - totalHeight - 25;
+      const padding = totalPadding / (leftNodes.length - 1);
+      let y = 25;
+      leftNodes.forEach(d => {
+        const nodeHeight = d.y1 - d.y0;
+        d.y0 = y;
+        d.y1 = y + nodeHeight;
+        y += nodeHeight + padding;
+      });
+
+      sankey.update({ nodes: sNodes, links: sLinks });
+
+      const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+      // Nodes
+      const rect = svg.append("g")
+        .attr("stroke", "#000")
+        .selectAll()
+        .data(sNodes)
+        .join("rect")
+          .attr("x", d => d.x0)
+          .attr("y", d => d.y0)
+          .attr("height", d => d.y1 - d.y0)
+          .attr("width", d => d.x1 - d.x0)
+          .attr("fill", d => color(d.category));
+
+      rect.append("title")
+        .text(d => `${d.name}\n${format(d.value)} hectares`);
+
+      // Links
+      const link = svg.append("g")
+        .attr("fill", "none")
+        .attr("stroke-opacity", 0.5)
+        .selectAll()
+        .data(sLinks)
+        .join("g")
+          .style("mix-blend-mode", "multiply");
+
+      let linkIndex = 0;
+      if (linkColor === "source-target") {
+        const gradient = link.append("linearGradient")
+          .attr("id", d => { d.uid = `link-${linkIndex++}`; return d.uid; })
+          .attr("gradientUnits", "userSpaceOnUse")
+          .attr("x1", d => d.source.x1)
+          .attr("x2", d => d.target.x0);
+        gradient.append("stop")
+          .attr("offset", "0%")
+          .attr("stop-color", d => color(d.source.category));
+        gradient.append("stop")
+          .attr("offset", "100%")
+          .attr("stop-color", d => color(d.target.category));
+      }
+
+      link.append("path")
+        .attr("d", d3.sankeyLinkHorizontal())
+        .attr("stroke", d => `url(#${d.uid})`)
+        .attr("stroke-width", d => Math.max(1, d.width))
+        .on("mouseover", function(event, d) {
+          d3.select(this).attr("stroke-opacity", 0.8);
+          hoverLabel.text(`${d.source.name.replace(" (1990)", "")} → ${d.target.name.replace(" (2021)", "")} · ${format(d.value)} hectares`);
+        })
+        .on("mouseout", function() {
+          d3.select(this).attr("stroke-opacity", 0.5);
+          hoverLabel.text("");
+        });
+
+      // Labels
+      svg.append("g")
+        .attr("font-size", "14px")
+        .attr("font-weight", "bold")
+        .attr("font-family", "Merriweather")
+        .selectAll()
+        .data(sNodes.filter(d => d.name.includes("(1990)")))
+        .join("text")
+          .attr("x", d => d.x1 + 6)
+          .attr("y", d => (d.y1 + d.y0) / 2)
+          .attr("dy", "0.35em")
+          .attr("text-anchor", "start")
+          .text(d => d.name.replace(" (1990)", ""));
+
+      // Year labels
+      const leftX = sNodes.find(d => d.name.includes("(1990)")).x0;
+      const rightX = sNodes.find(d => d.name.includes("(2021)")).x0;
+
+      svg.append("text")
+        .attr("x", leftX).attr("y", 15)
+        .attr("font-size", "16px").attr("font-weight", "bold")
+        .attr("font-family", "Merriweather").attr("fill", "#333")
+        .text("1990");
+
+      svg.append("text")
+        .attr("x", rightX - 20).attr("y", 15)
+        .attr("font-size", "16px").attr("font-weight", "bold")
+        .attr("font-family", "Merriweather").attr("fill", "#333")
+        .text("2021");
+    }
+
 
   </script>
 
